@@ -33,6 +33,7 @@ config = {
     "trigger":          "!",
     "scriptdir":        "/etc/mumblebot.d",
     "scriptwd":         "/",
+    "channel":          "/",
 }
 
 #Protocol message type to class mappings.  This could be done better
@@ -156,6 +157,7 @@ def parse_arguments():
     parser.add_argument("--trigger", help="If a message starts with this character, it'll send the message to the script named the first word in the message (or silently ignore it if there's no script).  The default (an exclamation mark) is usually fine.")
     parser.add_argument("--scriptdir", help="The directory containing the scripts to run.  The default (/etc/mumblebot.d) is usually fine.")
     parser.add_argument("--scriptwd", help="The working directory of each script.  The default (/) is usually fine.")
+    parser.add_argument("--channel", help="The channel to join.  This may either be given as a Unix-style path (/rootchannel/channel/subchannel) or a channel ID number (which may be retrieved with printchannels).  The default is the root channel.")
     #Get the options from the command line
     options = vars(parser.parse_args())
     #Save the options
@@ -352,6 +354,7 @@ class Receiver(threading.Thread):
     orphans = {} #Orphaned channels, same format as above
     users = {} 
     channellock = None
+    current_channel = None
     #Variables relevant to printing channels/users
     channelwait = None
     userwait = None
@@ -430,9 +433,10 @@ class Receiver(threading.Thread):
         #Unroll the data
         channelstate = Mumble_pb2.ChannelState()
         channelstate.ParseFromString(data)
+        #Lock the channel tree
+        self.channellock.acquire()
         #Root channel
         if channelstate.channel_id == 0:
-            self.channellock.acquire()
             #If it's the first time we've seen it
             if 0 not in self.channels:
                 self.channels[0] = Channel()
@@ -440,11 +444,8 @@ class Receiver(threading.Thread):
             #If not, update the name
             else:
                 self.channels[0].name = channelstate.name
-            self.channellock.release()
-            return
         #Regular channels, new channel
-        self.channellock.acquire()
-        if channelstate.channel_id not in self.channels:
+        elif channelstate.channel_id not in self.channels:
             t = Channel()
             t.name = channelstate.name
             t.parent = channelstate.parent
@@ -494,6 +495,46 @@ class Receiver(threading.Thread):
                          %(channelstate.channel_id, 
                            self.channels[channelstate.channel_id].name,
                            oldpid, channelstate.parent))
+        #Join the right channel when we learn about it
+        to_join = None
+        #If we're meant to be in root, join it
+        if config["channel"] == "/" and 0 in self.channels:
+            to_join = 0
+        #If we're given a channel number, join it when we get it
+        elif config["channel"].isdigit() and \
+                int(config["channel"]) in self.channels:
+            to_join = int(config["channel"])
+        #If we're given a path, join it
+        elif config["channel"][0] == "/" and len(config["channel"]) > 1 and \
+                0 in self.channels:
+            #Get a list of channel bits.
+            #Sucks if there's a / in the channel name
+            channel_path = filter(None, config["channel"].split("/")[1:])
+            #If the first part is the name of the root channel, remove it
+            if channel_path[0] == self.channels[0].name:
+                channel_path = channel_path[1:]
+            #We're at where in the tree.  If there's no more path to descend,
+            #return the name of the channel we're in.  Else, descend deeper.
+            #Failing that, return None
+            def _traverse_tree(self, channel_path, where):
+                #We've found the last element
+                if len(channel_path) == 0:
+                    return where
+                #If not, see if the next element is a known child
+                else:
+                    for p in self.channels[where].children:
+                        #When we've found the child, recurse
+                        if self.channels[p].name == channel_path[0]:
+                            return _traverse_tree(self, channel_path[1:], p)
+            #Find the id of the channel to join
+            to_join = _traverse_tree(self, channel_path, 0)
+        #If we're not already there, join the channel
+        if to_join is not None and to_join != self.current_channel:
+            userstate = Mumble_pb2.UserState()
+            userstate.channel_id = to_join
+            self.sender.send(userstate)
+            self.current_channel = to_join
+            logmsg("Joining [c%i] %s"%(to_join, self.channels[to_join].name))
         self.channellock.release()
 
     def onUserState(self, data):
