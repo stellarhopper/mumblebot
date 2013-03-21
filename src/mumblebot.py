@@ -257,6 +257,7 @@ class Sender(threading.Thread):
     sendlock = None
     pingdata = None
     pingthread = None
+    current_channel = None
     def __init__(self, socket):
         threading.Thread.__init__(self)
         self.socket = socket
@@ -311,8 +312,11 @@ class Sender(threading.Thread):
                 count = self.socket.send(res)
                 res = res[count:]
     #Special case to send a chat message
-    def send_chat_message(self):
-        #TODO: Finish this
+    def send_chat_message(self, msg):
+        textmessage = Mumble_pb2.TextMessage()
+        textmessage.message = msg
+        textmessage.channel_id.append(self.current_channel)
+        self.send(textmessage)
         return
     #Send keepalive pings
     def send_pings(self):
@@ -320,7 +324,7 @@ class Sender(threading.Thread):
         while True:
             self.send(self.pingdata)
             time.sleep(5)
-    #Send a message to the series of tubes
+    #Send a message to the series of tubes.  msg is a protobuf object
     def send(self, msg):
         #Type code
         type = msgnum[msg.__class__.__name__]
@@ -380,7 +384,7 @@ class Receiver(threading.Thread):
             self.userevent = threading.Event()
             self.userevent.clear()
         #Regex to split text message
-        self.messagesplitter = re.compile(r"%s(\S+)\s+(\S.*)"
+        self.msgsplitter = re.compile(r"%s(\S+)\s+(\S.*)"
                                           %config["trigger"])
     #Wait for messages, act on them as appropriate
     def run(self):
@@ -534,7 +538,8 @@ class Receiver(threading.Thread):
             userstate.channel_id = to_join
             self.sender.send(userstate)
             self.current_channel = to_join
-            logmsg("Joining [c%i] %s"%(to_join, self.channels[to_join].name))
+            self.sender.current_channel = to_join
+            logmsg("Joined [c%i] %s"%(to_join, self.channels[to_join].name))
         self.channellock.release()
 
     def onUserState(self, data):
@@ -561,10 +566,10 @@ class Receiver(threading.Thread):
                                              textmessage.actor,
                                              self.users[textmessage.actor][1]))
         #If the message doesn't start with the trigger, we don't care about it.
-        if not data.startswith(config["trigger"]):
+        if not textmessage.message.startswith(config["trigger"]):
             return
         #Extract the important bits
-        m = self.msgsplitter.match(data)
+        m = self.msgsplitter.match(textmessage.message)
         #Give up if someone goofed
         if not m: return
         #Script to invoke
@@ -573,21 +578,21 @@ class Receiver(threading.Thread):
         script = re.sub(r"[^A-Za-z0-9._]", '', script)
         #Text of the message
         text = m.group(2)
-        #TODO: Implement joining a channel
-        sender = self.users[textmessage.actor]
+        actor = self.users[textmessage.actor]
         #If the script has died, restart it
-        if self.pipes[script].is_dead():
+        if script in self.pipes and self.pipes[script].is_dead():
             debugmsg("%s found dead"%script)
             del d[script]
         #Start the script if need be
         if script not in self.pipes:
             try:
                 self.pipes[script] = Script(self.sender, script)
+                self.pipes[script].start()
             #This happens if the script doesn't exist or isn't executable
             except OSError as e:
                 debugmsg("Unable to start %s: %s"%(script, str(e)))
         #Send the message to the script
-        self.pipes[script].message(self.users[textmesage.actor], text)
+        self.pipes[script].message(self.users[textmessage.actor], text)
 
     #Receive a specified number of bytes
     def recvsize(self, size):
@@ -653,22 +658,25 @@ class Script(threading.Thread):
     def __init__(self, sender, script):
         #TODO: kill these threads before shutting down
         threading.Thread.__init__(self)
-        self.scriptame = os.path.join(config["scriptdir"], script)
-        self.process = subprocess.Popen(scriptname, stdin=subprocess.PIPE, 
+        self.sender = sender
+        self.scriptname = os.path.join(config["scriptdir"], script)
+        self.process = subprocess.Popen((self.scriptname), stdin=subprocess.PIPE, 
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT,
                                         cwd=config["scriptwd"])
-        logmsg("Started %s"%scriptname)
     #A loop to read output from the process and send it to the tubes
     def run(self):
-        while self.proces.poll() is None:
-            self.sender.send_chat_message(self.process.readline())
+        while self.process.poll() is None:
+            line = self.process.stdout.readline()
+            self.sender.send_chat_message(line)
+            #TODO: search for zero-length triggered messages
+            #TODO: send all messages to a specified script
             #TODO: error checking
     #Send a message to the process.  User is the user tuple for the user
     #That sent the message the bot picked up on
     def message(self, user, message):
-        self.process.stdin.write("[u%i:c%i] %s\n%s"%(user[2], user[0], user[1],
-                                                     message))
+        msg = "[u%i:c%i] %s\n%s\n"%(user[2], user[0], user[1],message)
+        self.process.stdin.write(msg)
     #Kill the script, if it doesn't listen to sigterm, oh well
     def kill(self):
         self.process.terminate()
