@@ -3,6 +3,7 @@
 
 # Imported modules
 import argparse
+import datetime
 import Mumble_pb2
 import os
 import platform
@@ -127,6 +128,8 @@ def main():
 
     except KeyboardInterrupt:
         pass
+    #Doesn't actually stop the receiver, just the pipes
+    receiver.stop()
     sender.stop()
     sender.join()
     socket.close()
@@ -215,7 +218,6 @@ def open_config():
             f = open(os.path.join(l, config["config"]))
             return f
         except IOError as e:
-            #TODO: Debug to stderr flag
             f = None
         try:
             f = open(os.path.join(l, "."+config["config"]))
@@ -285,7 +287,7 @@ class Sender(threading.Thread):
         if config["password"]: 
             authinfo.password = config["password"]
         else:
-            authinfo.password = "penis"
+            authinfo.password = ""
         self.send(authinfo)
         debugmsg("Authenticated as %s with password %s"%(authinfo.username, 
                                                          authinfo.password))
@@ -335,7 +337,6 @@ class Sender(threading.Thread):
         #Pack the header
         hdr = struct.pack(">HL", type, size)
         #Send it out
-        #TODO: Get a list of usernames/channels  Store as a dict? keys look like paths
         self.sendlock.acquire()
         self.txqueue.put(hdr+msg)
         self.sendlock.release()
@@ -375,8 +376,6 @@ class Receiver(threading.Thread):
         self.socket = socket
         self.daemon = True
         self.channellock = threading.Lock()
-        #TODO: add timestamps to debug messages printed to console
-        #TODO: Add a timeout for channel message, print the list on timeout
         if config["printchannels"]:
             self.channelwait = float(config["printchannels"])
         if config["printusers"]:
@@ -384,7 +383,7 @@ class Receiver(threading.Thread):
             self.userevent = threading.Event()
             self.userevent.clear()
         #Regex to split text message
-        self.msgsplitter = re.compile(r"%s(\S+)\s+(\S.*)"
+        self.msgsplitter = re.compile(r"%s(\S+)\s*(.*)"
                                           %config["trigger"])
     #Wait for messages, act on them as appropriate
     def run(self):
@@ -398,7 +397,6 @@ class Receiver(threading.Thread):
             #Unpack the header
             (type, size) = struct.unpack(">HL", header)
             data = self.recvsize(size)
-            #TODO: make sure we get the whole message
             typename = msgtype[type].__name__
             debugmsg("Got {}-byte {} message".format(size, typename))
             #Handle each message, this is going to get inefficient.
@@ -409,7 +407,8 @@ class Receiver(threading.Thread):
                  "TextMessage":     self.onTextMessage,
                 }[typename](data)
             except KeyError as ke:
-                debugmsg("{} message unhandled".format(typename))
+                #debugmsg("{} message unhandled".format(typename)) #DEBUG
+                pass
 
     def onVersion(self, data):
         serverversion = Mumble_pb2.Version()
@@ -421,7 +420,6 @@ class Receiver(threading.Thread):
                                                     serverversion.release,
                                                     serverversion.os,
                                                     serverversion.os_version))
-        #TODO: Timestamp and mark logmessages
 
     def onChannelState(self, data):
         #If we're still collecting channels, reset the timeout
@@ -493,7 +491,6 @@ class Receiver(threading.Thread):
                         add(channelstate.channel_id)
                 #Failing that, it's an orphan
                 else:
-                    #TODO: Add comment
                     self.orphans.add(channelstate.channel_id)
                 debugmsg("Changed channel %i's (%s) parent from %i to %i" 
                          %(channelstate.channel_id, 
@@ -639,8 +636,11 @@ class Receiver(threading.Thread):
 
     #Stop this thread and all subthreads
     def stop(self):
+        #Stop subthreads
+        for t in self.pipes:
+            t.stop()
+        #Stop sender
         self.sender.stop()
-        #TODO: finish this
 
 #Channel tree
 class Channel:
@@ -656,7 +656,6 @@ class Script(threading.Thread):
     sender = None
     scriptname = ""
     def __init__(self, sender, script):
-        #TODO: kill these threads before shutting down
         threading.Thread.__init__(self)
         self.sender = sender
         self.scriptname = os.path.join(config["scriptdir"], script)
@@ -677,10 +676,19 @@ class Script(threading.Thread):
     def message(self, user, message):
         msg = "[u%i:c%i] %s\n%s\n"%(user[2], user[0], user[1],message)
         self.process.stdin.write(msg)
-    #Kill the script, if it doesn't listen to sigterm, oh well
+    #Kill the script.  There may be bugs here.
     def kill(self):
-        self.process.terminate()
-        self.sender.send_chat_message(self.process.communicate())
+        #Try an EOF first
+        lastwords = self.process.communicate()
+        self.sender.send_chat_message(lastwords)
+        #Failing that, try a SIGTERM
+        if self.process.is_dead():
+            self.process.terminate()
+            #Failing that, try a SIGKILL
+            if self.process.is_dead():
+                self.process.kill()
+        #Wait() for the process
+        self.process.wait()
         debugmsg("Killed %s"%scriptname)
     #True if the process is dead
     def is_dead(self):
@@ -718,12 +726,15 @@ def update_logging():
 def _err_to_stderr(msg):
     #2TO3 Change this when protoc works on python 3
     with loglock:
+        msg = "<E>"+str(datetime.datetime.now())+": "+msg
         print >>sys.stderr, msg.encode('utf-8')
 def _log_to_stdout(msg):
     with loglock:
+        msg = "<I>"+str(datetime.datetime.now())+": "+msg
         print(msg.encode('utf-8'))
 def _debug_to_stdout(msg):
     with loglock:
+        msg = "<D>"+str(datetime.datetime.now())+": "+msg
         print(msg.encode('utf-8'))
 def _err_to_syslog(msg):
     syslog.syslog(syslog.LOG_ERR, msg)
