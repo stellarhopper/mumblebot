@@ -38,6 +38,7 @@ config = {
 }
 
 #Protocol message type to class mappings.  This could be done better
+#TODO: Make better.  Thanks clientkill
 msgtype = (Mumble_pb2.Version,
            Mumble_pb2.UDPTunnel,
            Mumble_pb2.Authenticate,
@@ -274,8 +275,8 @@ class Sender(threading.Thread):
         #Send back our version info
         clientversion = Mumble_pb2.Version()
         clientversion.version = struct.unpack(">I", struct.pack(">HBB", *version))[0]
+        #TODO: work on a better way to receive error messages from scripts
 
-        #TODO: Unpack received version
         clientversion.release = ""#mumblebot-0.0.1"
         clientversion.os = ""#platform.system()
         clientversion.os_version = ""#platform.release()
@@ -579,7 +580,7 @@ class Receiver(threading.Thread):
         #If the script has died, restart it
         if script in self.pipes and self.pipes[script].is_dead():
             debugmsg("%s found dead"%script)
-            del d[script]
+            del self.pipes[script]
         #Start the script if need be
         if script not in self.pipes:
             try:
@@ -588,8 +589,19 @@ class Receiver(threading.Thread):
             #This happens if the script doesn't exist or isn't executable
             except OSError as e:
                 debugmsg("Unable to start %s: %s"%(script, str(e)))
+                return
         #Send the message to the script
         self.pipes[script].message(self.users[textmessage.actor], text)
+            #We could restart it if it failed, but there's all sorts of race
+            #conditions that could be at play.  Chances are it's a buggy
+            #script.  Tell the user.
+#            errmsg("Unable to send message from [u%i:c%i] %s to %s: %s"% \
+#                   (self.users[textmessage.actor][2],
+#                    self.users[textmessage.actor][0],
+#                    self.users[textmessage.actor][1], script, text))
+#
+
+
 
     #Receive a specified number of bytes
     def recvsize(self, size):
@@ -638,7 +650,7 @@ class Receiver(threading.Thread):
     def stop(self):
         #Stop subthreads
         for t in self.pipes:
-            t.stop()
+            self.pipes[t].kill()
         #Stop sender
         self.sender.stop()
 
@@ -659,15 +671,34 @@ class Script(threading.Thread):
         threading.Thread.__init__(self)
         self.sender = sender
         self.scriptname = os.path.join(config["scriptdir"], script)
-        self.process = subprocess.Popen((self.scriptname), stdin=subprocess.PIPE, 
+        self.process = subprocess.Popen((self.scriptname),
+                                        stdin=subprocess.PIPE, 
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT,
                                         cwd=config["scriptwd"])
+        debugmsg("Started " + self.scriptname)
     #A loop to read output from the process and send it to the tubes
     def run(self):
+        #While we're still alive, read
         while self.process.poll() is None:
-            line = self.process.stdout.readline()
-            self.sender.send_chat_message(line)
+            try:
+                line = self.process.stdout.readline()
+                self.sender.send_chat_message(line)
+            except IOError as e:
+                #If we died because of an interrupt, die
+                if e.args[1] == 4:
+                    self.kill()
+        #When it's dead, send its last words to the chat
+        lastwords, stdewords = self.process.communicate()
+        #If it's dead, send the process's last words to the chat
+        if lastwords is not None:
+            self.sender.send_chat_message(lastwords)
+        if stdewords is not None:
+            self.sender.send_chat_message(stdewords)
+        self.process.wait()
+
+
+
             #TODO: search for zero-length triggered messages
             #TODO: send all messages to a specified script
             #TODO: error checking
@@ -675,21 +706,22 @@ class Script(threading.Thread):
     #That sent the message the bot picked up on
     def message(self, user, message):
         msg = "[u%i:c%i] %s\n%s\n"%(user[2], user[0], user[1],message)
-        self.process.stdin.write(msg)
+        self.process.stdin.write(msg.encode('utf-8'))
+
     #Kill the script.  There may be bugs here.
     def kill(self):
-        #Try an EOF first
-        lastwords = self.process.communicate()
-        self.sender.send_chat_message(lastwords)
-        #Failing that, try a SIGTERM
-        if self.process.is_dead():
+        #If it's dead, don't bother
+        if self.process.poll() is not None:
+            debugmsg("%s already dead"%self.scriptname)
+            return
+        #Try a SIGTERM
+        if self.process.poll() is None:
             self.process.terminate()
             #Failing that, try a SIGKILL
-            if self.process.is_dead():
+            if self.process.poll() is None:
                 self.process.kill()
         #Wait() for the process
-        self.process.wait()
-        debugmsg("Killed %s"%scriptname)
+        debugmsg("Killed %s"%self.scriptname)
     #True if the process is dead
     def is_dead(self):
         if self.process.poll() is None:
