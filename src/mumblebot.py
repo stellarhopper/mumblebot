@@ -706,7 +706,12 @@ class Script(threading.Thread):
     #That sent the message the bot picked up on
     def message(self, user, message):
         msg = "[u%i:c%i] %s\n%s\n"%(user[2], user[0], user[1],message)
-        self.process.stdin.write(msg.encode('utf-8'))
+        try:
+            msg_e = msg.encode('utf-8')
+            self.process.stdin.write(msg_e)
+        except ValueError as e:
+            errmsg("%s died before message could be sent: %s"%
+                     (self.scriptname, msg_e))
 
     #Kill the script.  There may be bugs here.
     def kill(self):
