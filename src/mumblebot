@@ -127,6 +127,7 @@ def main():
     #Busy loop to wait for keyboard to terminate us
     try:
         import time
+        #TODO: multiple tokens
         while sender.is_alive() and receiver.is_alive():
             time.sleep(1)
 
@@ -149,13 +150,13 @@ def parse_arguments():
     #Argparser
     parser = argparse.ArgumentParser(description="Extensible bot for Mumble")
     #Command-line options
-    parser.add_argument("-c", "--config", metavar="CONFIGFILE", help="Specifies the config file.  Arguments given on the command line take precedence over the config file.  If this is not specified, the config file will be looked for in the following locations: %s"%", ".join([str(p) for p in config_locations]))
+    parser.add_argument("-c", "--config", metavar="CONFIGFILE", help="Specifies the config file.  Arguments given on the command line take precedence over the config file.  If this is not specified, the config file will be looked for in the following locations: %s.  Every long option which may specified on the command line may be specified in the config file, separated by its value by whitespace."%", ".join([str(p) for p in config_locations]))
     parser.add_argument("-s", "--server", help="The mumble server to which to connect.")
     parser.add_argument("-p", "--port", type=int, help="The port to which to connect on the mumble server.")
     parser.add_argument("--srcip", help="The IP address from which to connect.  The default is usually fine.")
     parser.add_argument("--srcport", help="The port from which to connect.  The default is usually fine.")
     parser.add_argument("--timeout", help="The amout of time to wait for a connection to be established.  The default (10s) is usually fine.")
-    parser.add_argument("--syslog", action="store_true", help="Log to syslog instead of standard in/out/error.")
+    parser.add_argument("--syslog", action="store_true", help="Log to syslog instead of standard out/error.")
     parser.add_argument("-d", "--debug", action="store_true", help="Log messages useful for debugging.")
     parser.add_argument("-u", "--username", help="The username to use on the server.")
     parser.add_argument("--password", help="An optional password to send to the server.")
@@ -170,6 +171,7 @@ def parse_arguments():
     #Save the options
     changed = [] #List of changed options
     for o in options:
+        #TODO: Add numbers (or something) to username when username is already in use
         if options[o] is not None: 
             config[o] = options[o]
             changed.append(o)
@@ -794,7 +796,7 @@ def _debug_to_syslog(msg):
 def _noop(msg):
     return
 
-
+#TODO: Install script
 
 
 if __name__ == "__main__":
