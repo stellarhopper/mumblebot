@@ -719,7 +719,7 @@ class Script(threading.Thread):
     #Send a message to the process.  User is the user tuple for the user
     #That sent the message the bot picked up on
     def message(self, user, message):
-        msg = "[u%i:c%i] %s\n%s\n"%(user[2], user[0], user[1],message)
+        msg = "[u%i:c%i]\t%s\n%s\n"%(user[2], user[0], user[1],message)
         try:
             msg_e = msg.encode('utf-8')
             self.process.stdin.write(msg_e)

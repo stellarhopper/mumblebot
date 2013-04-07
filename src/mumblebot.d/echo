@@ -1,0 +1,33 @@
+#!/usr/bin/env perl
+#echo
+#Reference script.  Echoes its input.
+#by MagisterQuis
+#Created 20130326
+#Last Modified 20130326
+
+#Print errors (to stderr, and therefore mumble)
+use strict;
+
+use open ':encoding(utf8)';
+
+#Important to unbuffer stdout so output gets to mumble on time.
+$|=1;
+
+#Continuously listen
+while (<>) {
+        #Remove trailing newline
+        chomp;
+
+        #The first of every pair of lines is the sender
+        my ($uid, $chan, $name) = /\[u(\d+):c(\d+)\]\t(.*)/;
+
+        #The second is the message
+        my $msg = <>; 
+
+        #Remove trailing newline
+        chomp $msg;
+
+        #Anything sent to stdout or stderr goes to the channel the bot's in
+        #Output needs to be newline-terminated.
+        printf "[u%i:c%i] %s: %s\n", $uid, $chan, $name, $msg;
+}
