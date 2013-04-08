@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # Copyright (c) 2013, Stuart McMurray
 # All rights reserved.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #     * Redistributions of source code must retain the above copyright
@@ -12,7 +12,7 @@
 #     * Neither the name of the <organization> nor the
 #       names of its contributors may be used to endorse or promote products
 #       derived from this software without specific prior written permission.
-# 
+#
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 # ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 # WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -55,6 +55,8 @@ config = {
     "syslog":           False,
     "username":         "mumblebot",
     "password":         "",
+    "keyfile":          None,
+    "certfile":         None,
     "printusers":       False,
     "printchannels":    False,
     "trigger":          "!",
@@ -121,7 +123,7 @@ config_locations = (
     "/etc",
     "/usr/local/etc",
 )
-    
+
 #Start here
 def main():
     #Set the log functions
@@ -184,6 +186,8 @@ def parse_arguments():
     parser.add_argument("-d", "--debug", action="store_true", help="Log messages useful for debugging.")
     parser.add_argument("-u", "--username", help="The username to use on the server.")
     parser.add_argument("--password", help="An optional password to send to the server.")
+    parser.add_argument("--certfile", help="An optional ssl certificate to send to the server.  If this includes the key as well, KEYFILE need not be specified.")
+    parser.add_argument("--keyfile", help="An optional ssl key that matches the CERTFILE.  If the key is included in the CERTFILE, this need not be specified.")
     parser.add_argument("--printusers", metavar="TIMEOUT", nargs='?', const=1, type=float, help="Print a list of users on the server.  An optional time may be specified to limit how long to wait for new users to appear.  The default (1s) is usually fine.")
     parser.add_argument("--printchannels", metavar="TIMEOUT", nargs='?', const=1, type=float, help="Print a list of channels on the server.  An optional time may be specified to limit how long to wait for new channel data to become available.  The default (1s) is usually fine.")
     parser.add_argument("--trigger", help="If a message starts with this character, it'll send the message to the script named the first word in the message (or silently ignore it if there's no script).  The default (an exclamation mark) is usually fine.")
@@ -196,7 +200,7 @@ def parse_arguments():
     changed = [] #List of changed options
     for o in options:
         #TODO: Add numbers (or something) to username when username is already in use
-        if options[o] is not None: 
+        if options[o] is not None:
             config[o] = options[o]
             changed.append(o)
     #Update logging functions
@@ -231,7 +235,7 @@ def parse_config(changed):
     #Print out options, if debugging
     for o in config:
         debugmsg("Option {}: {}".format(o, config[o]))
-    
+
 
 def open_config():
     f = None
@@ -267,14 +271,16 @@ def connect_to_server():
     #Connect to the server
     try:
         s = socket.create_connection((config["server"], config["port"]),
-                                     config["timeout"], (config["srcip"], 
+                                     config["timeout"], (config["srcip"],
                                                          config["srcport"]))
     except socket.error as msg:
-        errmsg("Unable to connect to {}:{} - {}.".format(config["server"], 
+        errmsg("Unable to connect to {}:{} - {}.".format(config["server"],
                                                          config["port"], msg))
         exit(1)
-    sslsocket = ssl.wrap_socket(s, ssl_version=ssl.PROTOCOL_TLSv1,
-                                ciphers="AES256-SHA")
+    sslsocket = ssl.wrap_socket(s, keyfile=config["keyfile"],
+                                certfile=config["certfile"],
+                                ssl_version=ssl.PROTOCOL_TLSv1,
+                                ciphers="AES256-SHA", )
 #TODO: add support for keyfile
     logmsg("Connected to {}:{}".format(config["server"], config["port"]))
     #Set the socket back to blocking
@@ -314,12 +320,12 @@ class Sender(threading.Thread):
         #Send auth info
         authinfo = Mumble_pb2.Authenticate()
         authinfo.username = config["username"]
-        if config["password"]: 
+        if config["password"]:
             authinfo.password = config["password"]
         else:
             authinfo.password = ""
         self.send(authinfo)
-        debugmsg("Authenticated as %s with password %s"%(authinfo.username, 
+        debugmsg("Authenticated as %s with password %s"%(authinfo.username,
                                                          authinfo.password))
         #TODO: Implement tokens
         #TODO: Timeout on rx of auth message if !mumble server
@@ -387,7 +393,7 @@ class Receiver(threading.Thread):
     #Keep ahold of the channels and users on the server
     channels = {}
     orphans = {} #Orphaned channels, same format as above
-    users = {} 
+    users = {}
     channellock = None
     current_channel = None
     #Variables relevant to printing channels/users
@@ -420,7 +426,7 @@ class Receiver(threading.Thread):
         debugmsg("Receiver starting")
         #Flag to keep running
         _running = True
-        #Start 
+        #Start
         while _running:
             #Get the six header bytes
             header = self.recvsize(6)
@@ -445,7 +451,7 @@ class Receiver(threading.Thread):
         serverversion = Mumble_pb2.Version()
         #CamelCase, ReaLly?
         serverversion.ParseFromString(data)
-        (major, minor, revision) = struct.unpack('>HBB', 
+        (major, minor, revision) = struct.unpack('>HBB',
             struct.pack('>I', serverversion.version))
         logmsg("Server {}.{}.{} {} ({}: {})".format(major, minor, revision,
                                                     serverversion.release,
@@ -523,8 +529,8 @@ class Receiver(threading.Thread):
                 #Failing that, it's an orphan
                 else:
                     self.orphans.add(channelstate.channel_id)
-                debugmsg("Changed channel %i's (%s) parent from %i to %i" 
-                         %(channelstate.channel_id, 
+                debugmsg("Changed channel %i's (%s) parent from %i to %i"
+                         %(channelstate.channel_id,
                            self.channels[channelstate.channel_id].name,
                            oldpid, channelstate.parent))
         #Join the right channel when we learn about it
@@ -710,7 +716,7 @@ class Script(threading.Thread):
         self.sender = sender
         self.scriptname = os.path.join(config["scriptdir"], script)
         self.process = subprocess.Popen((self.scriptname),
-                                        stdin=subprocess.PIPE, 
+                                        stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT,
                                         cwd=config["scriptwd"])
