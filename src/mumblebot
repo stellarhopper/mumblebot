@@ -221,7 +221,7 @@ def parse_config(changed):
         #Remove whitespace
         line = line.strip()
         #Ignore comments
-        if line[0] == '#': continue
+        if len(line) == 0 or line[0] == '#': continue
         #Split the line into keys and values
         key, value = line.split(None, 1)
         #Ignore it if set by the command line
